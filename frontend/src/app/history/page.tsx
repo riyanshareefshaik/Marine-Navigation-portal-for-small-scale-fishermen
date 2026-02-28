@@ -22,7 +22,8 @@ export default function HistoryPage() {
     useEffect(() => {
         const fetchHistory = async () => {
             try {
-                const res = await fetch("http://127.0.0.1:8000/api/history");
+                const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+                const res = await fetch(`${apiUrl}/api/history`);
                 const data = await res.json();
                 setHistory(data);
             } catch (e) {
@@ -84,8 +85,8 @@ export default function HistoryPage() {
                                         <td className="p-4 font-mono text-orange-300">{item.seaTemperature.toFixed(1)}°C</td>
                                         <td className="p-4">
                                             <span className={`px-3 py-1 text-xs font-bold rounded-full border ${item.status === 'SAFE TO GO' ? 'bg-[#1fb97e]/20 text-[#2cd994] border-[#1fb97e]/30' :
-                                                    item.status === 'Caution' ? 'bg-orange-500/20 text-orange-400 border-orange-500/30' :
-                                                        'bg-red-500/20 text-red-400 border-red-500/30'
+                                                item.status === 'Caution' ? 'bg-orange-500/20 text-orange-400 border-orange-500/30' :
+                                                    'bg-red-500/20 text-red-400 border-red-500/30'
                                                 }`}>
                                                 {item.status}
                                             </span>

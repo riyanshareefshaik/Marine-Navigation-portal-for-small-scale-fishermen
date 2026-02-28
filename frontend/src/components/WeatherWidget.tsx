@@ -16,7 +16,8 @@ export function WeatherWidget({ locationId, theme = "dark" }: WeatherWidgetProps
     useEffect(() => {
         const fetchLoc = async () => {
             try {
-                const res = await fetch(`http://127.0.0.1:8000/api/locations/${locationId}`);
+                const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+                const res = await fetch(`${apiUrl}/api/locations/${locationId}`);
                 const locData = await res.json();
                 // Fallback to empty if id is invalid
                 if (locData.id) setData(locData);
