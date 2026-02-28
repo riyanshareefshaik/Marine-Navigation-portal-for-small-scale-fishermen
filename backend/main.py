@@ -22,10 +22,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# MongoDB Connection
+# MongoDB Connection (with Graceful Fallback)
 MONGO_URL = os.getenv("MONGO_URL", "mongodb://localhost:27017")
-client = AsyncIOMotorClient(MONGO_URL)
+client = AsyncIOMotorClient(MONGO_URL, serverSelectionTimeoutMS=2000)
 db = client.marine_safety
+MOCK_MEM_DB = {"locations": [], "sos": []}
+MONGODB_AVAILABLE = False
 
 # Dummy Pydantic models
 class LocationData(BaseModel):
@@ -236,26 +238,37 @@ import asyncio
 
 @app.on_event("startup")
 async def startup_db():
-    count = await db.locations.count_documents({})
-    if count == 0:
-        print("Seeding locations database with realtime telemetry...")
-        
-        # Concurrently fetch real-time data for all mocked locations
+    global MONGODB_AVAILABLE
+    try:
+        # Check connection
+        await client.server_info()
+        MONGODB_AVAILABLE = True
+        count = await db.locations.count_documents({})
+        if count == 0:
+            print("Seeding MongoDB locations database with realtime telemetry...")
+            async_tasks = [fetch_realtime_marine_data(loc) for loc in LOCATIONS]
+            enriched_locations = await asyncio.gather(*async_tasks)
+            await db.locations.insert_many(enriched_locations)
+            print(f"Successfully seeded {len(enriched_locations)} enriched locations into the DB!")
+    except Exception as e:
+        print("⚠️ MongoDB connection failed or not configured. Falling back to in-memory mode.", str(e))
+        MONGODB_AVAILABLE = False
+        print("Seeding Memory locations database with realtime telemetry...")
         async_tasks = [fetch_realtime_marine_data(loc) for loc in LOCATIONS]
-        enriched_locations = await asyncio.gather(*async_tasks)
-        
-        # Insert the enriched data models
-        await db.locations.insert_many(enriched_locations)
-        print(f"Successfully seeded {len(enriched_locations)} enriched locations into the DB!")
+        MOCK_MEM_DB["locations"] = await asyncio.gather(*async_tasks)
 
 @app.get("/api/locations", response_model=List[LocationData])
 async def get_locations():
+    if not MONGODB_AVAILABLE:
+        return MOCK_MEM_DB["locations"]
     cursor = db.locations.find({}, {"_id": 0})
-    locations = await cursor.to_list(length=100)
-    return locations
+    return await cursor.to_list(length=100)
 
 @app.get("/api/locations/{location_id}", response_model=LocationData)
 async def get_location(location_id: str):
+    if not MONGODB_AVAILABLE:
+        loc = next((l for l in MOCK_MEM_DB["locations"] if l["id"] == location_id), None)
+        return loc or {}
     loc = await db.locations.find_one({"id": location_id}, {"_id": 0})
     return loc or {}
 
@@ -275,8 +288,12 @@ async def send_sos_alert(req: SOSRequest):
         "timestamp": datetime.datetime.now().isoformat()
     }
     
-    # Store in DB
-    result = await db.sos_alerts.insert_one(alert_doc)
+    if MONGODB_AVAILABLE:
+        result = await db.sos_alerts.insert_one(alert_doc)
+        alert_id = str(result.inserted_id)
+    else:
+        MOCK_MEM_DB["sos"].append(alert_doc)
+        alert_id = str(len(MOCK_MEM_DB["sos"]))
     
     # Mock SMS sending
     print("=" * 40)
@@ -286,7 +303,7 @@ async def send_sos_alert(req: SOSRequest):
     print(f"Message: {req.message}")
     print("=" * 40)
     
-    return {"status": "success", "alert_id": str(result.inserted_id)}
+    return {"status": "success", "alert_id": alert_id}
 
 @app.get("/api/history")
 def get_history():
